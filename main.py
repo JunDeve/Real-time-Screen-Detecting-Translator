@@ -131,7 +131,93 @@ class SelectionOverlay:
 
 
 # ── 이동/리사이즈 가능한 선택 박스 ─────────────────────────
-_TOOLBAR_H = 30   # 툴바 높이
+_TOOLBAR_H  = 30   # 툴바 높이
+_SETTINGS_H = 32   # 설정 바 높이
+
+
+# ── 설정 바 (갱신 주기 + 민감도) ────────────────────────────
+class SettingsBar:
+    _POLLS = [("0.5s", 500), ("1s", 1000), ("1.5s", 1500), ("3s", 3000)]
+    _SENS  = [("높음", 3), ("보통", 8), ("낮음", 20)]
+
+    def __init__(self, root, on_change, poll_ms, threshold):
+        self._root      = root
+        self._on_change = on_change   # callback(poll_ms, threshold)
+        self._poll_ms   = poll_ms
+        self._threshold = threshold
+
+        self.win = tk.Toplevel(root)
+        self.win.overrideredirect(True)
+        self.win.attributes("-topmost", True)
+        self.win.configure(bg="#111111")
+
+        # 갱신 주기
+        tk.Label(self.win, text="갱신", bg="#111111", fg="#666666",
+                 font=("Malgun Gothic", 8), padx=6).pack(side="left")
+        self._poll_btns = {}
+        for label, ms in self._POLLS:
+            btn = tk.Button(
+                self.win, text=label,
+                bg="#1e1e1e", fg="#aaaaaa",
+                activebackground="#004466", activeforeground="white",
+                relief="flat", font=("Malgun Gothic", 8),
+                padx=7, pady=2, cursor="hand2", bd=0,
+                command=lambda m=ms: self._set_poll(m),
+            )
+            btn.pack(side="left", padx=1, pady=4)
+            self._poll_btns[ms] = btn
+
+        # 구분선
+        tk.Label(self.win, text="│", bg="#111111", fg="#333333",
+                 font=("Malgun Gothic", 9)).pack(side="left", padx=4)
+
+        # 민감도
+        tk.Label(self.win, text="민감도", bg="#111111", fg="#666666",
+                 font=("Malgun Gothic", 8), padx=4).pack(side="left")
+        self._sens_btns = {}
+        for label, val in self._SENS:
+            btn = tk.Button(
+                self.win, text=label,
+                bg="#1e1e1e", fg="#aaaaaa",
+                activebackground="#004466", activeforeground="white",
+                relief="flat", font=("Malgun Gothic", 8),
+                padx=7, pady=2, cursor="hand2", bd=0,
+                command=lambda v=val: self._set_sens(v),
+            )
+            btn.pack(side="left", padx=1, pady=4)
+            self._sens_btns[val] = btn
+
+        self._refresh_buttons()
+
+    def _set_poll(self, ms):
+        self._poll_ms = ms
+        self._refresh_buttons()
+        self._on_change(self._poll_ms, self._threshold)
+
+    def _set_sens(self, val):
+        self._threshold = val
+        self._refresh_buttons()
+        self._on_change(self._poll_ms, self._threshold)
+
+    def _refresh_buttons(self):
+        for ms, btn in self._poll_btns.items():
+            active = ms == self._poll_ms
+            btn.config(bg="#005580" if active else "#1e1e1e",
+                       fg="white"   if active else "#aaaaaa")
+        for val, btn in self._sens_btns.items():
+            active = val == self._threshold
+            btn.config(bg="#005580" if active else "#1e1e1e",
+                       fg="white"   if active else "#aaaaaa")
+
+    def place(self, x, y, w):
+        self.win.geometry(f"{w}x{_SETTINGS_H}+{x}+{y}")
+
+    def destroy(self):
+        try:
+            self.win.destroy()
+        except Exception:
+            pass
+
 
 class SelectionBox:
     """
@@ -147,15 +233,20 @@ class SelectionBox:
     }
 
     def __init__(self, root, bbox, on_change, on_move, on_close,
-                 on_lang_toggle, lang_label: str):
+                 on_lang_toggle, lang_label: str,
+                 on_settings, poll_ms, threshold):
         self._root           = root
         self._on_change      = on_change
-        self._on_move        = on_move        # 즉시 호출 (패널 위치 갱신용)
+        self._on_move        = on_move
         self._on_close       = on_close
         self._on_lang_toggle = on_lang_toggle
+        self._on_settings    = on_settings
+        self._poll_ms        = poll_ms
+        self._threshold      = threshold
         self._debounce       = None
-        self._dd             = {}   # 리사이즈 드래그 데이터
-        self._td             = {}   # 툴바 드래그 데이터
+        self._dd             = {}
+        self._td             = {}
+        self._settings_bar   = None
 
         self.x = bbox["left"]
         self.y = bbox["top"]
@@ -201,6 +292,16 @@ class SelectionBox:
         )
         lang_btn.pack(side="right", fill="y")
 
+        # 설정 버튼
+        tk.Button(
+            self.bar, text="⚙",
+            bg="#1a1a1a", fg="#888888",
+            activebackground="#222222", activeforeground="white",
+            relief="flat", font=("Arial", 10),
+            padx=8, cursor="hand2", bd=0,
+            command=self._toggle_settings,
+        ).pack(side="right", fill="y")
+
         # ── 선택 박스 (투명) ──
         self.win = tk.Toplevel(root)
         self.win.overrideredirect(True)
@@ -223,6 +324,8 @@ class SelectionBox:
         bar_y = max(0, self.y - _TOOLBAR_H)
         self.bar.geometry(f"{self.w}x{_TOOLBAR_H}+{self.x}+{bar_y}")
         self.win.geometry(f"{self.w}x{self.h}+{self.x}+{self.y}")
+        if self._settings_bar:
+            self._settings_bar.place(self.x, self.y + self.h, self.w)
 
     # ── 선택 박스 그리기 ──
     def _draw(self):
@@ -241,6 +344,20 @@ class SelectionBox:
                 px-s//2, py-s//2, px+s//2, py+s//2,
                 fill=_BORDER, outline="white", width=1,
             )
+
+    # ── 설정 바 토글 ──
+    def _toggle_settings(self):
+        if self._settings_bar:
+            self._settings_bar.destroy()
+            self._settings_bar = None
+        else:
+            self._settings_bar = SettingsBar(
+                self._root,
+                on_change=self._on_settings,
+                poll_ms=self._poll_ms,
+                threshold=self._threshold,
+            )
+            self._settings_bar.place(self.x, self.y + self.h, self.w)
 
     # ── 언어 토글 ──
     def _toggle_lang(self):
@@ -338,6 +455,9 @@ class SelectionBox:
         self._on_close()
 
     def destroy(self):
+        if self._settings_bar:
+            self._settings_bar.destroy()
+            self._settings_bar = None
         try:
             self.bar.destroy()
             self.win.destroy()
@@ -487,8 +607,10 @@ class ScreenTranslator:
         self._panel       = None
         self._target_lang = TARGET_LANG
         self._last_bbox   = None
-        self._last_arr    = None   # 직전 캡처 이미지 (변화 감지용)
-        self._poll_id     = None   # after() 핸들
+        self._last_arr    = None
+        self._poll_id     = None
+        self._poll_ms     = POLL_MS
+        self._threshold   = CHANGE_THRESHOLD
 
     def _activate(self):
         if self._active:
@@ -512,6 +634,9 @@ class ScreenTranslator:
             on_close=self._cleanup,
             on_lang_toggle=self._toggle_lang,
             lang_label=_lang_label(self._target_lang),
+            on_settings=self._on_settings_changed,
+            poll_ms=self._poll_ms,
+            threshold=self._threshold,
         )
         self._do_translate(bbox)
         self._start_poll()
@@ -531,7 +656,7 @@ class ScreenTranslator:
 
     def _start_poll(self):
         self._stop_poll()
-        self._poll_id = self.root.after(POLL_MS, self._poll)
+        self._poll_id = self.root.after(self._poll_ms, self._poll)
 
     def _stop_poll(self):
         if self._poll_id:
@@ -560,7 +685,7 @@ class ScreenTranslator:
                     changed = True
                 else:
                     diff = np.mean(np.abs(arr - self._last_arr))
-                    changed = diff > CHANGE_THRESHOLD
+                    changed = diff > self._threshold
 
                 if changed:
                     self._last_arr = arr
@@ -572,6 +697,11 @@ class ScreenTranslator:
             self.root.after(0, self._start_poll)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_settings_changed(self, poll_ms: int, threshold: int):
+        self._poll_ms   = poll_ms
+        self._threshold = threshold
+        self._start_poll()   # 새 주기로 즉시 재시작
 
     def _toggle_lang(self) -> str:
         self._target_lang = "en" if self._target_lang == "ko" else "ko"
