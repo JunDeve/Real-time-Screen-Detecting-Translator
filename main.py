@@ -37,15 +37,17 @@ _HANDLE = 10   # 핸들 크기(px)
 _EDGE   = 14   # 리사이즈 감지 여백(px)
 
 
-# ── OCR + 번역 ──────────────────────────────────────────────
-def translate_image(img: Image.Image, target_lang: str = "ko") -> str:
+# ── OCR ─────────────────────────────────────────────────────
+def ocr_image(img: Image.Image) -> str:
     arr = np.array(img)
     results = _reader.readtext(arr, detail=0, paragraph=True)
-    text = "\n".join(results).strip()
+    return "\n".join(results).strip()
 
+
+# ── 번역 ─────────────────────────────────────────────────────
+def do_translate(text: str, target_lang: str = "ko") -> str:
     if not text:
         return "[인식된 텍스트 없음]"
-
     try:
         translated = GoogleTranslator(
             source="auto", target=target_lang
@@ -53,6 +55,11 @@ def translate_image(img: Image.Image, target_lang: str = "ko") -> str:
         return translated or text
     except Exception as e:
         return f"[번역 오류: {e}]\n\n원문:\n{text}"
+
+
+# ── OCR + 번역 (일반 호출용) ─────────────────────────────────
+def translate_image(img: Image.Image, target_lang: str = "ko") -> str:
+    return do_translate(ocr_image(img), target_lang)
 
 
 # ── 백슬래시 3회 감지 ────────────────────────────────────────
@@ -607,7 +614,8 @@ class ScreenTranslator:
         self._panel       = None
         self._target_lang = TARGET_LANG
         self._last_bbox   = None
-        self._last_arr    = None
+        self._last_arr    = None   # 1단계: 픽셀 비교용
+        self._last_text   = None   # 2단계: OCR 텍스트 비교용
         self._poll_id     = None
         self._poll_ms     = POLL_MS
         self._threshold   = CHANGE_THRESHOLD
@@ -626,6 +634,7 @@ class ScreenTranslator:
     def _build_ui(self, bbox):
         self._last_bbox = bbox
         self._last_arr  = None
+        self._last_text = None
         self._panel = TranslationPanel(self.root, bbox)
         self._box   = SelectionBox(
             self.root, bbox,
@@ -650,6 +659,8 @@ class ScreenTranslator:
     def _on_box_changed(self, bbox):
         """디바운스 후 호출 — 재번역."""
         self._last_bbox = bbox
+        self._last_arr  = None   # 박스 변경 시 캐시 초기화
+        self._last_text = None
         if self._panel:
             self._panel.set_loading()
         self._do_translate(bbox)
@@ -680,21 +691,28 @@ class ScreenTranslator:
                 img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
                 arr = np.array(img, dtype=np.float32)
 
-                changed = False
-                if self._last_arr is None or self._last_arr.shape != arr.shape:
-                    changed = True
-                else:
+                # ── 1단계: 픽셀 비교 (매우 빠름) ──
+                if self._last_arr is not None and self._last_arr.shape == arr.shape:
                     diff = np.mean(np.abs(arr - self._last_arr))
-                    changed = diff > self._threshold
+                    if diff <= self._threshold:
+                        return   # 변화 없음 → OCR 스킵
+                self._last_arr = arr
 
-                if changed:
-                    self._last_arr = arr
-                    result = translate_image(img, self._target_lang)
-                    self.root.after(0, self._show_result, result)
+                # ── 2단계: OCR 실행 후 텍스트 비교 ──
+                text = ocr_image(img)
+                if text == self._last_text:
+                    return   # 배경만 바뀜 → 번역 스킵
+                self._last_text = text
+
+                # ── 3단계: 번역 ──
+                result = do_translate(text, self._target_lang)
+                self.root.after(0, self._show_result, result)
+
             except Exception:
                 pass
-            # 다음 폴링 예약
-            self.root.after(0, self._start_poll)
+            finally:
+                # 다음 폴링 예약
+                self.root.after(0, self._start_poll)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -705,6 +723,7 @@ class ScreenTranslator:
 
     def _toggle_lang(self) -> str:
         self._target_lang = "en" if self._target_lang == "ko" else "ko"
+        self._last_text   = None   # 언어 바뀌면 텍스트 캐시 초기화 → 재번역 강제
         label = _lang_label(self._target_lang)
         if self._last_bbox and self._panel:
             self._panel.set_loading()
@@ -737,7 +756,8 @@ class ScreenTranslator:
 
     def _cleanup(self):
         self._stop_poll()
-        self._last_arr = None
+        self._last_arr  = None
+        self._last_text = None
         if self._box:
             try:
                 self._box.destroy()
