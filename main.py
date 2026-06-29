@@ -21,7 +21,8 @@ from deep_translator import GoogleTranslator
 
 from config import (
     TARGET_LANG, OCR_LANGS,
-    TRIPLE_KEY_OPEN, TRIPLE_KEY_CLOSE, TRIPLE_INTERVAL, DEBOUNCE_MS, PANEL_WIDTH,
+    TRIPLE_KEY_OPEN, TRIPLE_KEY_CLOSE, TRIPLE_INTERVAL,
+    DEBOUNCE_MS, PANEL_WIDTH, POLL_MS, CHANGE_THRESHOLD,
 )
 
 # EasyOCR 리더 — 앱 시작 시 한 번만 로드 (수 초 소요)
@@ -486,6 +487,8 @@ class ScreenTranslator:
         self._panel       = None
         self._target_lang = TARGET_LANG
         self._last_bbox   = None
+        self._last_arr    = None   # 직전 캡처 이미지 (변화 감지용)
+        self._poll_id     = None   # after() 핸들
 
     def _activate(self):
         if self._active:
@@ -500,6 +503,7 @@ class ScreenTranslator:
 
     def _build_ui(self, bbox):
         self._last_bbox = bbox
+        self._last_arr  = None
         self._panel = TranslationPanel(self.root, bbox)
         self._box   = SelectionBox(
             self.root, bbox,
@@ -510,6 +514,7 @@ class ScreenTranslator:
             lang_label=_lang_label(self._target_lang),
         )
         self._do_translate(bbox)
+        self._start_poll()
 
     def _on_box_moved(self, bbox):
         """박스 이동 중 즉시 호출 — 패널 위치만 갱신 (번역 없음)."""
@@ -523,6 +528,50 @@ class ScreenTranslator:
         if self._panel:
             self._panel.set_loading()
         self._do_translate(bbox)
+
+    def _start_poll(self):
+        self._stop_poll()
+        self._poll_id = self.root.after(POLL_MS, self._poll)
+
+    def _stop_poll(self):
+        if self._poll_id:
+            self.root.after_cancel(self._poll_id)
+            self._poll_id = None
+
+    def _poll(self):
+        if not self._box or not self._panel or not self._last_bbox:
+            return
+        bbox = self._last_bbox
+
+        def worker():
+            try:
+                with mss.mss() as sct:
+                    raw = sct.grab({
+                        "left":   bbox["left"],
+                        "top":    bbox["top"],
+                        "width":  bbox["width"],
+                        "height": bbox["height"],
+                    })
+                img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+                arr = np.array(img, dtype=np.float32)
+
+                changed = False
+                if self._last_arr is None or self._last_arr.shape != arr.shape:
+                    changed = True
+                else:
+                    diff = np.mean(np.abs(arr - self._last_arr))
+                    changed = diff > CHANGE_THRESHOLD
+
+                if changed:
+                    self._last_arr = arr
+                    result = translate_image(img, self._target_lang)
+                    self.root.after(0, self._show_result, result)
+            except Exception:
+                pass
+            # 다음 폴링 예약
+            self.root.after(0, self._start_poll)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _toggle_lang(self) -> str:
         self._target_lang = "en" if self._target_lang == "ko" else "ko"
@@ -557,6 +606,8 @@ class ScreenTranslator:
             self._panel.set_text(text)
 
     def _cleanup(self):
+        self._stop_poll()
+        self._last_arr = None
         if self._box:
             try:
                 self._box.destroy()
