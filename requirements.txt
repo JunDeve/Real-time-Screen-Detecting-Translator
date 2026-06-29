@@ -1,0 +1,6 @@
+easyocr
+deep-translator
+keyboard
+mss
+Pillow
+numpy
