@@ -5,15 +5,18 @@ API 키 없이 무료로 동작합니다. (EasyOCR + Google Translate)
 
 ---
 
-## 실행 방법
+## 설치 및 실행
 
-1. 의존성 설치
+### 처음 사용하는 경우 (설치 필요)
 
-```bash
-pip install -r requirements.txt
-```
+1. `install.bat` 더블클릭
+2. 설치가 완료되면 탐색기가 자동으로 열리고 `screen_translator.bat` 가 선택됨
+3. `screen_translator.bat` 더블클릭하여 실행
 
-2. 실행
+> ⚠️ Python이 설치되어 있어야 합니다. 없다면 https://www.python.org/downloads/ 에서 설치 후 진행하세요.  
+> 최초 실행 시 EasyOCR 모델 다운로드로 수십 초 소요될 수 있습니다.
+
+### 이미 설치된 경우
 
 ```
 screen_translator.bat  더블클릭
