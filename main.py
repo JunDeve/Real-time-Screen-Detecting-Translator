@@ -712,7 +712,22 @@ class ScreenTranslator:
         self._cleanup()
         if self._tray:
             self._tray.stop()
-        self.root.after(0, self.root.quit)
+        self.root.after(0, self._show_exit_msg)
+
+    def _show_exit_msg(self):
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg="#1e1e1e")
+        tk.Label(win, text="Screen Translator 종료됨",
+                 bg="#1e1e1e", fg="#aaaaaa",
+                 font=("Segoe UI", 11, "bold"), padx=20, pady=10).pack()
+        sw = win.winfo_screenwidth()
+        sh = win.winfo_screenheight()
+        win.update_idletasks()
+        w, h = win.winfo_width(), win.winfo_height()
+        win.geometry(f"+{sw - w - 24}+{sh - h - 64}")
+        win.after(1500, self.root.quit)
 
     def _activate(self):
         if self._active:
@@ -874,15 +889,29 @@ class ScreenTranslator:
         self.root.after(0, self._cleanup)
 
     def run(self):
-        print("=" * 44)
-        print("  Screen Translator 실행 중")
-        print("  켜기: [[[   끄기: ]]]")
-        print("  트레이 아이콘에서 상태 확인 가능")
-        print("=" * 44)
         self._setup_tray()
         TripleKeyDetector(TRIPLE_KEY_OPEN,  self._activate)
         TripleKeyDetector(TRIPLE_KEY_CLOSE, self._deactivate)
+        self.root.after(300, self._show_startup_msg)
         self.root.mainloop()
+
+    def _show_startup_msg(self):
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg="#1e1e1e")
+        tk.Label(win, text="Screen Translator 시작됨",
+                 bg="#1e1e1e", fg="white",
+                 font=("Segoe UI", 11, "bold"), padx=20, pady=8).pack()
+        tk.Label(win, text="우측 하단 트레이 아이콘에서 확인하세요\n[[[ 켜기     ]]] 끄기",
+                 bg="#1e1e1e", fg="#aaaaaa",
+                 font=("Segoe UI", 9), padx=20, pady=4).pack()
+        sw = win.winfo_screenwidth()
+        sh = win.winfo_screenheight()
+        win.update_idletasks()
+        w, h = win.winfo_width(), win.winfo_height()
+        win.geometry(f"+{sw - w - 24}+{sh - h - 64}")
+        win.after(2500, win.destroy)
 
 
 if __name__ == "__main__":
