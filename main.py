@@ -4,44 +4,72 @@
 끄기   : ]]] (] 3번 빠르게) 또는 닫기 버튼
 동작   : 화면 어두워짐 -> 드래그로 영역 선택 -> 우측에 번역 결과 표시
          선택 박스 이동/리사이즈 가능, 변경 시 자동 재번역
-번역   : EasyOCR (로컬) + Google Translate (무료, API 키 불필요)
+번역   : Windows 내장 OCR + Google Translate (무료, API 키 불필요)
 """
 
 import tkinter as tk
 import threading
 import time
+import sys
+import os
 import numpy as np
 
 import keyboard
 import mss
 from PIL import Image, ImageDraw
-import easyocr
 from deep_translator import GoogleTranslator
 import pystray
+import pytesseract
 
 from config import (
-    TARGET_LANG, OCR_LANGS,
+    TARGET_LANG,
     TRIPLE_KEY_OPEN, TRIPLE_KEY_CLOSE, TRIPLE_INTERVAL,
     DEBOUNCE_MS, PANEL_WIDTH, POLL_MS, CHANGE_THRESHOLD,
 )
 
-# EasyOCR 리더 — 앱 시작 시 한 번만 로드 (수 초 소요)
-print("OCR 모델 로딩 중...")
-_reader = easyocr.Reader(OCR_LANGS, gpu=False, verbose=False)
-print("OCR 모델 로드 완료.")
+# ── Tesseract 경로 설정 ──────────────────────────────────────
+# PyInstaller 번들 실행 시: sys._MEIPASS/tesseract
+# 일반 실행 시: 프로젝트 폴더 기준 또는 Program Files
+def _find_tesseract() -> str:
+    # 1) PyInstaller 번들 내부
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, "tesseract", "tesseract.exe")
+    # 2) 프로젝트 폴더 내 tesseract/
+    local = os.path.join(os.path.dirname(__file__), "tesseract", "tesseract.exe")
+    if os.path.exists(local):
+        return local
+    # 3) 기본 설치 경로
+    default = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    if os.path.exists(default):
+        return default
+    return "tesseract"  # PATH에 있으면 동작
+
+def _tessdata_dir() -> str:
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, "tessdata")
+    return os.path.join(os.path.dirname(__file__), "tessdata")
+
+pytesseract.pytesseract.tesseract_cmd = _find_tesseract()
+os.environ["TESSDATA_PREFIX"] = _tessdata_dir()
+
+# target_lang → OCR 소스 언어 (번역 방향의 반대)
+_OCR_LANG = {"ko": "eng", "en": "kor"}
 
 # 투명 처리에 사용할 색상 (이 색상이 윈도우에서 완전 투명 처리됨)
 _TRANS  = "#fefefe"
 _BORDER = "#00aaff"
-_HANDLE = 10   # 핸들 크기(px)
-_EDGE   = 14   # 리사이즈 감지 여백(px)
+_HANDLE = 10
+_EDGE   = 14
 
 
-# ── OCR ─────────────────────────────────────────────────────
-def ocr_image(img: Image.Image) -> str:
-    arr = np.array(img)
-    results = _reader.readtext(arr, detail=0, paragraph=True)
-    return "\n".join(results).strip()
+# ── Tesseract OCR ────────────────────────────────────────────
+def ocr_image(img: Image.Image, target_lang: str = "ko") -> str:
+    lang = _OCR_LANG.get(target_lang, "eng")
+    try:
+        text = pytesseract.image_to_string(img, lang=lang, config="--psm 6")
+        return text.strip()
+    except Exception:
+        return ""
 
 
 # ── 번역 ─────────────────────────────────────────────────────
@@ -59,7 +87,7 @@ def do_translate(text: str, target_lang: str = "ko") -> str:
 
 # ── OCR + 번역 (일반 호출용) ─────────────────────────────────
 def translate_image(img: Image.Image, target_lang: str = "ko") -> str:
-    return do_translate(ocr_image(img), target_lang)
+    return do_translate(ocr_image(img, target_lang), target_lang)
 
 
 # ── 백슬래시 3회 감지 ────────────────────────────────────────
@@ -771,7 +799,7 @@ class ScreenTranslator:
                 self._last_arr = arr
 
                 # ── 2단계: OCR 실행 후 텍스트 비교 ──
-                text = ocr_image(img)
+                text = ocr_image(img, self._target_lang)
                 if text == self._last_text:
                     return   # 배경만 바뀜 → 번역 스킵
                 self._last_text = text

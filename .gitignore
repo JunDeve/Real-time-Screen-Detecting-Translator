@@ -3,3 +3,8 @@ __pycache__/
 *.pyo
 *.pyd
 .env
+dist/
+build/
+*.spec
+tesseract/
+tessdata/
