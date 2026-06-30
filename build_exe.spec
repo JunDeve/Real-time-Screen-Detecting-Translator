@@ -31,9 +31,20 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# onefile 압축 해제~앱 준비 사이의 로딩 화면 (main.py에서 pyi_splash.close()로 닫음)
+splash = Splash(
+    os.path.join(BASE, 'splash.png'),
+    binaries=a.binaries,
+    datas=a.datas,
+    text_pos=None,
+    always_on_top=True,
+)
+
 exe = EXE(
     pyz,
     a.scripts,
+    splash,
+    splash.binaries,
     a.binaries,
     a.zipfiles,
     a.datas,

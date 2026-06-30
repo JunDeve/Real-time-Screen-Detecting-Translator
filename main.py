@@ -22,6 +22,13 @@ from deep_translator import GoogleTranslator
 import pystray
 import pytesseract
 
+# PyInstaller 스플래시(번들 exe 압축 해제~트레이 준비 사이의 로딩 화면).
+# 소스에서 python main.py로 직접 실행할 때는 모듈이 없으므로 조용히 무시한다.
+try:
+    import pyi_splash
+except ImportError:
+    pyi_splash = None
+
 from config import (
     TARGET_LANG,
     TRIPLE_KEY_OPEN, TRIPLE_KEY_CLOSE, TRIPLE_INTERVAL,
@@ -929,6 +936,8 @@ class ScreenTranslator:
         self._setup_tray()
         TripleKeyDetector(TRIPLE_KEY_OPEN,  self._activate)
         TripleKeyDetector(TRIPLE_KEY_CLOSE, self._deactivate)
+        if pyi_splash:
+            pyi_splash.close()   # 트레이·단축키 준비 완료 → 로딩 화면 닫기
         self.root.after(300, self._show_startup_msg)
         self.root.mainloop()
 
