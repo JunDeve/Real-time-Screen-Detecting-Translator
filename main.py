@@ -683,30 +683,46 @@ class ScreenTranslator:
     # ── 트레이 아이콘 ──
     def _setup_tray(self):
         menu = pystray.Menu(
-            pystray.MenuItem("Screen Translator", None, enabled=False),
+            pystray.MenuItem("jundeve.com", self._open_site),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("[[[ - 번역 시작", None, enabled=False),
-            pystray.MenuItem("]]] - 번역 종료", None, enabled=False),
+            pystray.MenuItem("번역 시작  ([[[)", self._tray_activate),
+            pystray.MenuItem("번역 종료  (]]])", self._tray_deactivate),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("사용법 보기", self._open_readme),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("종료", self._exit_app),
         )
         self._tray = pystray.Icon(
             "ScreenTranslator",
             _make_tray_image("#555555"),
-            "Screen Translator\n대기 중\n[[[ 켜기   ]]] 끄기",
+            "Screen Translator",
             menu,
         )
         threading.Thread(target=self._tray.run, daemon=True).start()
 
     def _tray_idle(self):
         if self._tray:
-            self._tray.icon    = _make_tray_image("#555555")
-            self._tray.title   = "Screen Translator\n대기 중\n[[[ 켜기   ]]] 끄기"
+            self._tray.icon  = _make_tray_image("#555555")
+            self._tray.title = "Screen Translator"
 
     def _tray_active(self):
         if self._tray:
-            self._tray.icon    = _make_tray_image("#00aa55")
-            self._tray.title   = "Screen Translator\n번역 중\n]]] 끄기"
+            self._tray.icon  = _make_tray_image("#00aa55")
+            self._tray.title = "Screen Translator"
+
+    def _open_site(self, icon=None, item=None):
+        import webbrowser
+        webbrowser.open("https://jundeve.com/")
+
+    def _open_readme(self, icon=None, item=None):
+        import webbrowser
+        webbrowser.open("https://github.com/JunDeve/Real-time-Screen-Detecting-Translator#readme")
+
+    def _tray_activate(self, icon=None, item=None):
+        self.root.after(0, self._activate)
+
+    def _tray_deactivate(self, icon=None, item=None):
+        self.root.after(0, self._deactivate)
 
     def _exit_app(self, icon=None, item=None):
         self._cleanup()
