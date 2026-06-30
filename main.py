@@ -12,6 +12,7 @@ import threading
 import time
 import sys
 import os
+import ctypes
 import numpy as np
 
 import keyboard
@@ -655,13 +656,8 @@ def _icon_path() -> str:
     return os.path.join(os.path.dirname(__file__), "icon.ico")
 
 def _make_tray_image(active: bool = False) -> Image.Image:
-    img = Image.open(_icon_path()).convert("RGBA").resize((64, 64), Image.LANCZOS)
-    if not active:
-        # 비활성: 반투명 처리
-        r, g, b, a = img.split()
-        a = a.point(lambda x: int(x * 0.45))
-        img = Image.merge("RGBA", (r, g, b, a))
-    return img
+    # 활성/비활성 모두 완전 불투명 (반투명 처리 제거)
+    return Image.open(_icon_path()).convert("RGBA").resize((64, 64), Image.LANCZOS)
 
 
 # ── 메인 앱 ────────────────────────────────────────────────
@@ -730,10 +726,30 @@ class ScreenTranslator:
         self.root.after(0, self._deactivate)
 
     def _exit_app(self, icon=None, item=None):
-        self._cleanup()
+        # 트레이 콜백 스레드에서 호출됨 → 트레이만 여기서 멈추고
+        # Tk 위젯 정리는 반드시 메인 스레드로 위임 (Tk는 스레드 안전하지 않음)
         if self._tray:
             self._tray.stop()
-        self.root.after(0, self._show_exit_msg)
+            self._tray = None
+        self.root.after(0, self._do_exit)
+
+    def _do_exit(self):
+        # 메인 스레드: 키보드 후킹 해제 + 위젯 정리 후 종료 메시지
+        try:
+            keyboard.unhook_all()
+        except Exception:
+            pass
+        self._cleanup()
+        self._show_exit_msg()
+
+    def _shutdown(self):
+        try:
+            self.root.quit()
+            self.root.destroy()
+        except Exception:
+            pass
+        # 남아있는 데몬 스레드(keyboard 리스너 등)와 무관하게 즉시 종료
+        os._exit(0)
 
     def _show_exit_msg(self):
         win = tk.Toplevel(self.root)
@@ -748,7 +764,7 @@ class ScreenTranslator:
         win.update_idletasks()
         w, h = win.winfo_width(), win.winfo_height()
         win.geometry(f"+{sw - w - 24}+{sh - h - 64}")
-        win.after(1500, self.root.quit)
+        win.after(1500, self._shutdown)
 
     def _activate(self):
         if self._active:
@@ -935,6 +951,30 @@ class ScreenTranslator:
         win.after(2500, win.destroy)
 
 
+# ── 단일 인스턴스 보장 (중복 실행 방지) ──────────────────────
+# 핸들을 전역에 보관해야 GC로 뮤텍스가 해제되지 않음
+_INSTANCE_MUTEX = None
+_MUTEX_NAME     = "Global\\JunDeve_ScreenTranslator_SingleInstance"
+
+def _ensure_single_instance() -> bool:
+    """이미 실행 중이면 False. 처음 실행이면 True."""
+    global _INSTANCE_MUTEX
+    ERROR_ALREADY_EXISTS = 183
+    kernel32 = ctypes.windll.kernel32
+    _INSTANCE_MUTEX = kernel32.CreateMutexW(None, False, _MUTEX_NAME)
+    return kernel32.GetLastError() != ERROR_ALREADY_EXISTS
+
+
 if __name__ == "__main__":
+    if not _ensure_single_instance():
+        # 이미 실행 중 → 안내 후 종료 (콘솔 없는 창 모드 대비 MessageBox 사용)
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "Screen Translator가 이미 실행 중입니다.\n우측 하단 트레이 아이콘을 확인하세요.",
+            "Screen Translator",
+            0x40,  # MB_ICONINFORMATION
+        )
+        sys.exit(0)
+
     app = ScreenTranslator()
     app.run()
