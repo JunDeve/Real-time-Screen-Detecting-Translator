@@ -14,9 +14,10 @@ import numpy as np
 
 import keyboard
 import mss
-from PIL import Image
+from PIL import Image, ImageDraw
 import easyocr
 from deep_translator import GoogleTranslator
+import pystray
 
 from config import (
     TARGET_LANG, OCR_LANGS,
@@ -79,9 +80,10 @@ class TripleKeyDetector:
 
 # ── 전체화면 선택 오버레이 ──────────────────────────────────
 class SelectionOverlay:
-    def __init__(self, root, on_select):
+    def __init__(self, root, on_select, on_cancel=None):
         self._root = root
         self._on_select = on_select
+        self._on_cancel = on_cancel
         self._sx = self._sy = 0
         self._rect = None
 
@@ -107,7 +109,22 @@ class SelectionOverlay:
         self.cv.bind("<ButtonPress-1>",   self._press)
         self.cv.bind("<B1-Motion>",       self._drag)
         self.cv.bind("<ButtonRelease-1>", self._release)
-        self.win.bind("<Escape>", lambda _: self.win.destroy())
+        self.win.bind("<Escape>", lambda _: self._cancel())
+
+        # 포커스 이슈 대비 전역 ESC 훅
+        keyboard.add_hotkey("esc", self._cancel, suppress=False)
+
+    def _cancel(self):
+        try:
+            keyboard.remove_hotkey("esc")
+        except Exception:
+            pass
+        try:
+            self.win.destroy()
+        except Exception:
+            pass
+        if self._on_cancel:
+            self._on_cancel()
 
     def _press(self, e):
         self._sx, self._sy = e.x_root, e.y_root
@@ -126,6 +143,10 @@ class SelectionOverlay:
         )
 
     def _release(self, e):
+        try:
+            keyboard.remove_hotkey("esc")
+        except Exception:
+            pass
         x1 = min(self._sx, e.x_root)
         y1 = min(self._sy, e.y_root)
         x2 = max(self._sx, e.x_root)
@@ -599,6 +620,17 @@ class TranslationPanel:
             pass
 
 
+# ── 트레이 아이콘 이미지 생성 ────────────────────────────────
+def _make_tray_image(color: str) -> Image.Image:
+    img  = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse([4, 4, 60, 60], fill=color)
+    # 가운데 T 자
+    draw.rectangle([28, 18, 36, 46], fill="white")
+    draw.rectangle([18, 18, 46, 26], fill="white")
+    return img
+
+
 # ── 메인 앱 ────────────────────────────────────────────────
 def _lang_label(target: str) -> str:
     return "EN→KO" if target == "ko" else "KO→EN"
@@ -613,22 +645,63 @@ class ScreenTranslator:
         self._panel       = None
         self._target_lang = TARGET_LANG
         self._last_bbox   = None
-        self._last_arr    = None   # 1단계: 픽셀 비교용
-        self._last_text   = None   # 2단계: OCR 텍스트 비교용
+        self._last_arr    = None
+        self._last_text   = None
         self._poll_id     = None
         self._poll_ms     = POLL_MS
         self._threshold   = CHANGE_THRESHOLD
+        self._tray        = None
+
+    # ── 트레이 아이콘 ──
+    def _setup_tray(self):
+        menu = pystray.Menu(
+            pystray.MenuItem("Screen Translator", None, enabled=False),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("[[[ - 번역 시작", None, enabled=False),
+            pystray.MenuItem("]]] - 번역 종료", None, enabled=False),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("종료", self._exit_app),
+        )
+        self._tray = pystray.Icon(
+            "ScreenTranslator",
+            _make_tray_image("#555555"),
+            "Screen Translator\n대기 중\n[[[ 켜기   ]]] 끄기",
+            menu,
+        )
+        threading.Thread(target=self._tray.run, daemon=True).start()
+
+    def _tray_idle(self):
+        if self._tray:
+            self._tray.icon    = _make_tray_image("#555555")
+            self._tray.title   = "Screen Translator\n대기 중\n[[[ 켜기   ]]] 끄기"
+
+    def _tray_active(self):
+        if self._tray:
+            self._tray.icon    = _make_tray_image("#00aa55")
+            self._tray.title   = "Screen Translator\n번역 중\n]]] 끄기"
+
+    def _exit_app(self, icon=None, item=None):
+        self._cleanup()
+        if self._tray:
+            self._tray.stop()
+        self.root.after(0, self.root.quit)
 
     def _activate(self):
         if self._active:
             return
         self._active = True
-        self.root.after(0, lambda: SelectionOverlay(self.root, self._on_selected))
+        self._tray_active()
+        self.root.after(0, lambda: SelectionOverlay(
+            self.root, self._on_selected, self._on_overlay_cancelled))
 
     def _on_selected(self, bbox):
         self._active = False
         self._cleanup()
         self.root.after(150, lambda: self._build_ui(bbox))
+
+    def _on_overlay_cancelled(self):
+        self._active = False
+        self._tray_idle()
 
     def _build_ui(self, bbox):
         self._last_bbox = bbox
@@ -757,6 +830,7 @@ class ScreenTranslator:
         self._stop_poll()
         self._last_arr  = None
         self._last_text = None
+        self._tray_idle()
         if self._box:
             try:
                 self._box.destroy()
@@ -773,11 +847,11 @@ class ScreenTranslator:
 
     def run(self):
         print("=" * 44)
-        print("  화면 번역기 실행 중")
-        print("  켜기     : [[[  ([ 3번 빠르게)")
-        print("  끄기     : ]]]  (] 3번 빠르게) 또는 닫기 버튼")
-        print(f"  번역 언어: {self._target_lang}  (툴바 EN<->KO 버튼으로 전환)")
+        print("  Screen Translator 실행 중")
+        print("  켜기: [[[   끄기: ]]]")
+        print("  트레이 아이콘에서 상태 확인 가능")
         print("=" * 44)
+        self._setup_tray()
         TripleKeyDetector(TRIPLE_KEY_OPEN,  self._activate)
         TripleKeyDetector(TRIPLE_KEY_CLOSE, self._deactivate)
         self.root.mainloop()
