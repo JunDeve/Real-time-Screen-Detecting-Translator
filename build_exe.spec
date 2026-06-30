@@ -11,6 +11,7 @@ a = Analysis(
     binaries=[],
     datas=[
         (os.path.join(BASE, 'config.py'),   '.'),
+        (os.path.join(BASE, 'icon.ico'),    '.'),
         (os.path.join(BASE, 'tessdata'),    'tessdata'),
         (os.path.join(BASE, 'tesseract'),   'tesseract'),
     ],

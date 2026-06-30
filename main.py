@@ -649,13 +649,18 @@ class TranslationPanel:
 
 
 # ── 트레이 아이콘 이미지 생성 ────────────────────────────────
-def _make_tray_image(color: str) -> Image.Image:
-    img  = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.ellipse([4, 4, 60, 60], fill=color)
-    # 가운데 T 자
-    draw.rectangle([28, 18, 36, 46], fill="white")
-    draw.rectangle([18, 18, 46, 26], fill="white")
+def _icon_path() -> str:
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, "icon.ico")
+    return os.path.join(os.path.dirname(__file__), "icon.ico")
+
+def _make_tray_image(active: bool = False) -> Image.Image:
+    img = Image.open(_icon_path()).convert("RGBA").resize((64, 64), Image.LANCZOS)
+    if not active:
+        # 비활성: 반투명 처리
+        r, g, b, a = img.split()
+        a = a.point(lambda x: int(x * 0.45))
+        img = Image.merge("RGBA", (r, g, b, a))
     return img
 
 
@@ -694,7 +699,7 @@ class ScreenTranslator:
         )
         self._tray = pystray.Icon(
             "ScreenTranslator",
-            _make_tray_image("#555555"),
+            _make_tray_image(active=False),
             "Screen Translator",
             menu,
         )
@@ -702,12 +707,12 @@ class ScreenTranslator:
 
     def _tray_idle(self):
         if self._tray:
-            self._tray.icon  = _make_tray_image("#555555")
+            self._tray.icon  = _make_tray_image(active=False)
             self._tray.title = "Screen Translator"
 
     def _tray_active(self):
         if self._tray:
-            self._tray.icon  = _make_tray_image("#00aa55")
+            self._tray.icon  = _make_tray_image(active=True)
             self._tray.title = "Screen Translator"
 
     def _open_site(self, icon=None, item=None):
